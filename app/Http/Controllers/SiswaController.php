@@ -1,0 +1,288 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Imports\SiswaImport;
+use App\Http\Resources\SiswaResource;
+use App\Handlers\SiswaHandler;
+use App\Repositories\SiswaRepository;
+use App\Models\Siswa;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Maatwebsite\Excel\Facades\Excel;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\Log;
+use App\Helpers\ApiResponse;
+use Illuminate\Support\Facades\Cache;
+use Throwable;
+
+class SiswaController extends Controller
+{
+    protected $handler;
+
+    public function __construct(SiswaHandler $handler)
+    {
+        $this->handler = $handler;
+    }
+
+    // MENAMPILKAN SEMUA SISWA
+    public function index()
+    {
+        try {
+            $result = $this->handler->index();
+
+            return response()->json([
+                'meta' => [
+                    'code' => 200,
+                    'status' => 'success',
+                    'message' => 'Data siswa berhasil ditampilkan'
+                ],
+                'source' => $result['source'],
+                'data' => $result['data']
+            ], 200);
+
+        } catch (Throwable $e) {
+            Log::error('Gagal menampilkan siswa: ' . $e->getMessage());
+
+            return ApiResponse::response(
+                null,
+                'Data siswa gagal ditampilkan',
+                500
+            );
+        }
+    }
+
+    // MENAMBAHKAN SISWA
+    public function store(Request $request)
+    {
+        try {
+            $validated = $request->validate([
+                'name' => 'required|string|max:100',
+                'kelas' => 'required|string|max:50',
+                'umur' => 'required|integer|min:1',
+            ]);
+
+            $siswa = Siswa::create($validated);
+
+            Cache::store('redis')->forget('siswa');
+
+            return ApiResponse::response(
+                $siswa,
+                'Data siswa berhasil ditambahkan',
+                201
+            );
+
+        } catch (ValidationException $e) {
+            return ApiResponse::response(
+                $e->errors(),
+                'Validasi gagal',
+                422
+            );
+
+        } catch (Throwable $e) {
+            Log::error('Gagal menambahkan siswa: ' . $e->getMessage());
+
+            return ApiResponse::response(
+                null,
+                'Gagal menambahkan data siswa',
+                500
+            );
+        }
+    }
+
+    // MENAMPILKAN SATU SISWA
+    public function show(string $id)
+    {
+        try {
+            $siswa = Siswa::find($id);
+
+            if (!$siswa) {
+                return ApiResponse::response(
+                    null,
+                    'Data siswa tidak ditemukan',
+                    404
+                );
+            }
+
+            return ApiResponse::response(
+                $siswa,
+                'Data siswa berhasil ditemukan',
+                200
+            );
+
+        } catch (Throwable $e) {
+            Log::error('Gagal mencari siswa: ' . $e->getMessage());
+
+            return ApiResponse::response(
+                null,
+                'Gagal mencari data siswa',
+                500
+            );
+        }
+    }
+
+    // MENGUBAH DATA SISWA
+    public function update(Request $request, string $id)
+    {
+        try {
+            $siswa = Siswa::find($id);
+
+            if (!$siswa) {
+                return ApiResponse::response(
+                    null,
+                    'Data siswa tidak ditemukan',
+                    404
+                );
+            }
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:100',
+                'kelas' => 'required|string|max:50',
+                'umur' => 'required|integer|min:1',
+            ]);
+
+            $siswa->update($validated);
+
+            Cache::store('redis')->forget('siswa');
+
+            return ApiResponse::response(
+                $siswa->fresh(),
+                'Data siswa berhasil diperbarui',
+                200
+            );
+
+        } catch (ValidationException $e) {
+            return ApiResponse::response(
+                $e->errors(),
+                'Validasi gagal',
+                422
+            );
+
+        } catch (Throwable $e) {
+            Log::error('Gagal memperbarui siswa: ' . $e->getMessage());
+
+            return ApiResponse::response(
+                null,
+                'Gagal memperbarui data siswa',
+                500
+            );
+        }
+    }
+
+    // MENGHAPUS SISWA
+    public function destroy(string $id)
+    {
+        try {
+            $siswa = Siswa::find($id);
+
+            if (!$siswa) {
+                return ApiResponse::response(
+                    null,
+                    'Data siswa tidak ditemukan',
+                    404
+                );
+            }
+
+            $siswa->delete();
+
+            Cache::store('redis')->forget('siswa');
+
+            return ApiResponse::response(
+                null,
+                'Data siswa berhasil dihapus',
+                200
+            );
+
+        } catch (Throwable $e) {
+            Log::error('Gagal menghapus siswa: ' . $e->getMessage());
+
+            return ApiResponse::response(
+                null,
+                'Gagal menghapus data siswa',
+                500
+            );
+        }
+    }
+
+    // IMPORT DATA SISWA DARI EXCEL
+    public function importExcel(Request $request)
+    {
+        try {
+            $request->validate([
+                'file' => 'required|file|mimes:xlsx,xls,csv|max:10240',
+            ]);
+
+            Excel::import(
+                new SiswaImport,
+                $request->file('file')
+            );
+
+            Cache::store('redis')->forget('siswa');
+
+            return ApiResponse::response(
+                null,
+                'Data siswa berhasil diimport',
+                200
+            );
+
+        } catch (ValidationException $e) {
+            return ApiResponse::response(
+                $e->errors(),
+                'Validasi file gagal',
+                422
+            );
+
+        } catch (ExcelValidationException $e) {
+            $failures = [];
+
+            foreach ($e->failures() as $failure) {
+                $failures[] = [
+                    'baris' => $failure->row(),
+                    'kolom' => $failure->attribute(),
+                    'errors' => $failure->errors(),
+                ];
+            }
+
+            return ApiResponse::response(
+                $failures,
+                'Validasi data Excel gagal',
+                422
+            );
+
+        } catch (Throwable $e) {
+            Log::error('Gagal import Excel: ' . $e->getMessage());
+
+            return ApiResponse::response(
+                null,
+                'Gagal mengimport data siswa',
+                500
+            );
+        }
+    }
+
+    public function batchStore(Request $request)
+    {
+        $request->validate([
+            'siswa' => 'required|array',
+            'siswa.*.name' => 'required|string|max:100',
+            'siswa.*.kelas' => 'required|string|max:50',
+            'siswa.*.umur' => 'required|integer',
+        ]);
+
+        $data = collect($request->siswa)->map(function ($item) {
+            $item['created_at'] = now();
+            $item['updated_at'] = now();
+
+            return $item;
+        })->toArray();
+
+        foreach (array_chunk($data, 100) as $chunk) {
+            Siswa::insert($chunk);
+        }
+
+        return response()->json([
+            'message' => 'Data siswa berhasil ditambahkan'
+        ]);
+    }
+}
