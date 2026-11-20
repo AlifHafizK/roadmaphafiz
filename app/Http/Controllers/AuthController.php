@@ -31,7 +31,6 @@ class AuthController extends Controller
             return response()->json([
                 'message' => 'Register berhasil',
                 'user' => $user,
-                'token' => $token,
             ], 201);
 
         } catch (ValidationException $e) {
